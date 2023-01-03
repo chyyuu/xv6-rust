@@ -74,6 +74,64 @@ use crate::arch::riscv::qemu::param::NCPU;
 static mut TIMER_SCRATCH:[[u64; 5]; NCPU] = [[0u64; 5]; NCPU];
 static STARTED:AtomicBool = AtomicBool::new(false);
 
+ // Physical Memory Protection Configuration
+pub mod pmpcfg0 {
+    use core::arch::asm;
+
+    // Permission enum contains all possible permission modes for pmp registers
+    #[derive(Clone, Copy, Debug)]
+    pub enum Permission {
+        NONE = 0b000,
+        R = 0b001,
+        W = 0b010,
+        RW = 0b011,
+        X = 0b100,
+        RX = 0b101,
+        WX = 0b110,
+        RWX = 0b111,
+    }
+
+    // Range enum contains all possible addressing modes for pmp registers
+    pub enum Range {
+        OFF = 0b00,
+        TOR = 0b01,
+        NA4 = 0b10,
+        NAPOT = 0b11,
+    }
+
+    // Set the pmp configuration corresponging to the index
+    #[inline]
+    pub unsafe fn set_pmp(index: usize, range: Range, permission: Permission, locked: bool) {
+        assert!(index < 8);
+        let mut value = _read();
+        let byte = (locked as usize) << 7 | (range as usize) << 3 | (permission as usize);
+        value |= byte << (8 * index);
+        _write(value);
+    }
+
+    #[inline]
+    unsafe fn _read() -> usize {
+        let bits: usize;
+        asm!("csrr {}, pmpcfg0", out(reg) bits);
+        bits
+    }
+
+    #[inline]
+    unsafe fn _write(bits: usize) {
+        asm!("csrw pmpcfg0, {}", in(reg) bits);
+    }
+}
+
+// Physical memory protection address register
+pub mod pmpaddr0 {
+    use core::arch::asm;
+
+    pub fn write(bits: usize) {
+        unsafe {
+            asm!("csrw pmpaddr0, {}", in(reg) bits);
+        }
+    }
+}
 /// 引导启动程序,进行寄存器的初始化操作
 #[no_mangle]
 pub unsafe fn start() -> !{
@@ -91,6 +149,10 @@ pub unsafe fn start() -> !{
     medeleg::write(0xffff);
     mideleg::write(0xffff);
     sie::intr_on();
+
+    pmpaddr0::write(0x3fffffffffffff);
+    //pmpcfg0::write(0xf);
+    pmpcfg0::set_pmp(0, pmpcfg0::Range::TOR, pmpcfg0::Permission::RWX, false); 
 
     // ask for clock interrupts.
     timer_init();
@@ -146,6 +208,7 @@ unsafe fn timer_init(){
 /// 进入内核初始化
 #[no_mangle]
 pub unsafe extern "C" fn rust_main() {
+    //loop{};
     if cpu::cpuid() == 0 {
         console_init();
         println!("{}",LOGO); 
